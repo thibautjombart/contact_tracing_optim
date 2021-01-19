@@ -1,0 +1,78 @@
+---
+title: "Simulating contact tracing data"
+author: "Thibaut Jombart"
+params:
+  grouped_plot: TRUE
+output:
+  html_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, collapse = TRUE, fig.width = 8, fig.height = 6, dpi = 70)
+```
+
+
+
+
+# Data simulation
+
+## Simulated distributions
+
+
+### Incubation period
+
+```{r }
+
+library(distcrete)
+library(epitrix)
+
+incub_mu <- 9.4
+incub_sd <- 7.4
+
+params <- gamma_mucv2shapescale(incub_mu,
+                                incub_sd / incub_mu)
+
+incubation <- distcrete("gamma",
+                        interval = 1,
+                        shape = params$shape,
+                        scale = params$scale)
+
+```
+
+
+
+
+### Duration of exposures
+
+Duration is drawn from a distribution $~ 1 + Exp(d - 1)$ where $d$ is the mean
+duration of exposure (must be at least 1).
+
+```{r }
+
+duration_r <- function(n, mean = 1) {
+  if (mean < 1) {
+    msg <- "mean duration of exposure must be >=1 day"
+    stop(msg)
+  }
+  
+  1 + rpois(n, mean - 1)
+}
+
+```
+
+
+
+### Dates of exposures
+
+Date of exposure are drawn from a Uniform distribution on a given time-frame:
+
+```{r }
+
+date_exposure_r <- function(n, min = 0L, max = 30L) {
+  base <- seq(from = min, to = max, by = 1L)
+  N <- length(base)
+  base[sample.int(N, size = n, replace = TRUE)]
+}
+
+```
