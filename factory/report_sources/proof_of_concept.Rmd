@@ -26,6 +26,7 @@ knitr::opts_chunk$set(echo = TRUE, collapse = TRUE, fig.width = 8, fig.height = 
 
 library(distcrete)
 library(epitrix)
+library(tidyverse)
 
 incub_mu <- 9.4
 incub_sd <- 7.4
@@ -40,7 +41,17 @@ incubation <- distcrete("gamma",
 
 ```
 
+Example:
 
+```{r }
+
+incubation$r(1000) %>%
+  qplot() +
+  theme_bw() +
+  labs(x = "Incubation time",
+       y = "Frequency")
+
+```
 
 
 ### Duration of exposures
@@ -61,6 +72,17 @@ duration_r <- function(n, mean = 1) {
 
 ```
 
+Example:
+
+```{r }
+
+duration_r(1000, mean = 2.5) %>%
+  qplot() +
+  theme_bw() +
+  labs(x = "Duration of exposure",
+       y = "Frequency")
+
+```
 
 
 ### Dates of exposures
@@ -69,10 +91,36 @@ Date of exposure are drawn from a Uniform distribution on a given time-frame:
 
 ```{r }
 
-date_exposure_r <- function(n, min = 0L, max = 30L) {
+date_exposure_r <- function(n, min = 0L, max = 30L, mean_duration = 1) {
   base <- seq(from = min, to = max, by = 1L)
-  N <- length(base)
-  base[sample.int(N, size = n, replace = TRUE)]
+  L <- length(base)
+  date_start <- base[sample.int(L, size = n, replace = TRUE)]
+  durations <- duration_r(n, mean_duration)
+  data.frame(
+      id = 1:n,
+      exposure_start = date_start,
+      exposure_end = date_start + durations - 1,
+      exposure_duration = durations
+  )
 }
+
+```
+
+Example:
+
+```{r }
+
+toy_data <- date_exposure_r(10, mean_duration = 1.5)
+toy_data
+
+toy_data %>%
+  mutate(id = factor(id)) %>%
+  ggplot(aes(x = exposure_start, y = id, color = id)) +
+  geom_segment(aes(xend = exposure_end, yend = id)) +
+  geom_point() +
+  geom_point(aes(x = exposure_end)) +
+  theme_bw() +
+  guides(color = FALSE) +
+  labs(x = "Exposure windows", y = "Contact ID")
 
 ```
