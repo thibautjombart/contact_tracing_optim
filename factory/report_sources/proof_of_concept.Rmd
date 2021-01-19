@@ -19,7 +19,6 @@ knitr::opts_chunk$set(echo = TRUE, collapse = TRUE, fig.width = 8, fig.height = 
 
 ## Simulated distributions
 
-
 ### Incubation period
 
 ```{r }
@@ -54,6 +53,7 @@ incubation$r(1000) %>%
 ```
 
 
+
 ### Duration of exposures
 
 Duration is drawn from a distribution $~ 1 + Exp(d - 1)$ where $d$ is the mean
@@ -83,6 +83,7 @@ duration_r(1000, mean = 2.5) %>%
        y = "Frequency")
 
 ```
+
 
 
 ### Dates of exposures
@@ -124,3 +125,83 @@ toy_data %>%
   labs(x = "Exposure windows", y = "Contact ID")
 
 ```
+
+
+
+### Infection of contacts
+
+The infection of contacts is determined as follows:
+
+1. determine the probability of infection given the rate of infectious contacts
+2. determine if there is an infection using a Binomial (Bernoulli) distribution
+3. determine the day of the infection from the window of exposure
+4. determine the day of symptom onset from the incubation time distribution
+
+```{r }
+
+
+sample_ <- function(x, n = length(x), replace = FALSE) {
+  x[sample.int(length(x), n, replace = replace)]
+}
+
+pick_exposure <- function(start, end) {
+  vapply(seq_along(start),
+         function(i) sample_(start[i]:end[i], 1L),
+         1L)
+}
+
+#' @param x contact data as returned by `date_exposure_r`
+#'
+#' @param rate_infection a positive rate of infection per day of contact
+#'
+#' @param incubation_time a function simulating incubation times whose only
+#'   argument is `n`, the number of simulated incubation times
+#' 
+infect_contacts <- function(x,
+                            rate_infection = 0,
+                            incubation_time = incubation$r) {
+
+  out <- mutate(
+      x,
+      p_infection = 1 - exp(-rate_infection * exposure_duration),
+      rnd = runif(n()),
+      case = if_else(rnd < p_infection, "case", "non_case"),
+      case = factor(case, levels = c("case", "non_case")),
+      date_infection = if_else(
+          case == "case",
+          pick_exposure(exposure_start, exposure_end),
+          NA_integer_),
+      date_onset = if_else(
+          case == "case",
+          as.integer(date_infection + incubation_time()),
+          NA_integer_))
+
+  select(out, -rnd)
+}
+
+```
+
+Example:
+
+```{r }
+
+toy_data <- infect_contacts(toy_data, rate_infection = 0.7)
+toy_data
+
+toy_data %>%
+  mutate(id = factor(id)) %>%
+  ggplot(aes(x = exposure_start, y = id, color = case)) +
+  geom_segment(aes(xend = exposure_end, yend = id)) +
+  geom_point() +
+  geom_point(aes(x = exposure_end)) +
+  geom_point(aes(x = date_infection), shape = 4, size = 4) +
+  geom_point(aes(x = date_onset), shape = 1, size = 4) +
+  theme_bw() +
+  labs(x = "Exposure windows", y = "Contact ID")
+
+```
+
+
+## Simulator
+
+
