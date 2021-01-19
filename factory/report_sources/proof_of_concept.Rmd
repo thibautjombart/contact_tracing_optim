@@ -273,3 +273,153 @@ x
 plot(x)
 
 ```
+
+
+
+
+
+# Contact tracing simulation
+
+## Random follow-up
+
+In this section we devise a function which will process a `contact_data` object
+and simulate follow-up over time using a random strategy.
+
+### Adding followup window
+
+This function adds to variables to indicate when followup must start and end (both dates inclusive).
+```{r }
+
+add_followup <- function(x, followup_duration) {
+  mutate(x,
+         followup_start = exposure_end + 1,
+         followup_end = followup_start + followup_duration - 1)
+}
+
+x <- x %>%
+  add_followup(21)
+x
+
+```
+
+
+### Finding active contacts
+
+```{r }
+
+active_contacts <- function(x, t, filter = TRUE) {
+  out <- mutate(x,
+                active = t >= followup_start & t <= followup_end)
+  if (filter) {
+    out <- filter(out, active)
+    out <- select(out, -active)
+  }
+  out
+}
+
+
+```
+
+Example:
+
+```{r }
+
+x %>%
+  active_contacts(5, filter = FALSE)
+
+x %>%
+  active_contacts(10)
+
+x %>%
+  active_contacts(10) %>%
+  plot()
+
+```
+
+
+
+### Random followup strategy
+
+```{r }
+
+#' @param x a `contact_data` object
+#'
+#' @param t current time of followup
+#'
+#' @param coverage the proportion of contacts followed
+
+random_followup <- function(x, t, coverage, followup_only = FALSE) {
+  
+  out <- active_contacts(x, t, filter = FALSE)
+
+  out <- mutate(out,
+                followup = sample(c("seen", "missed"),
+                                  n(),
+                                  replace = TRUE,
+                                  prob = c(coverage, 1 - coverage)),
+                followup = if_else(active, followup, "inactive"),
+                followup = if_else(followup == "seen" &
+                                   t == date_onset &
+                                   case == "case",
+                                   "detected",
+                                   followup))
+  out <- rename(out, !!paste("followup", t, sep = "_") := followup)
+  out <- select(out, -active)
+  if (followup_only) {
+    out <- select(out, !!paste("followup", t, sep = "_"))
+  }
+  out
+}
+
+```
+
+Example:
+
+```{r }
+
+# 50% contacts followed on day 10
+random_followup(x, 10, 0.5)
+random_followup(x, 10, 0.5) %>%
+  count(followup_10)
+
+```
+
+All followup from day 1 to 30:
+
+```{r }
+
+days <- seq(from = min(x$followup_start), to = max(x$followup_end), by = 1L)
+
+res_random <- lapply(days, function(t) random_followup(x, t, 0.5, TRUE)) %>%
+  bind_cols() %>%
+  rownames_to_column("id") %>%
+  pivot_longer(-1, names_to = "time", values_to = "followup") %>%
+  mutate(
+      time = gsub("followup_", "", time), time = as.integer(time),
+      followup = factor(followup, levels = c("inactive", "seen", "missed", "detected")))
+res_random
+
+
+## general graph
+res_random %>%
+  count(time, followup) %>%
+  ggplot(aes(x = time, y = n)) +
+  geom_col(aes(fill = followup)) +
+  theme_bw() +
+  labs(x = "time",
+       y = "number of contacts",
+       title = "Contact followup")
+
+## with only active contacts
+res_random %>%
+  filter(followup != "inactive") %>% 
+  count(time, followup) %>%
+  ggplot(aes(x = time, y = n)) +
+  geom_col(aes(fill = followup)) +
+  theme_bw() +
+  labs(x = "time",
+       y = "number of contacts",
+       title = "Contact followup",
+       subtitle = "only active contacts")
+
+```
