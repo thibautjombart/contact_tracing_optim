@@ -1,8 +1,6 @@
 ---
 title: "Simulating contact tracing data"
 author: "Thibaut Jombart"
-params:
-  grouped_plot: TRUE
 output:
   html_document: default
 ---
@@ -31,7 +29,7 @@ incub_mu <- 9.4
 incub_sd <- 7.4
 
 params <- gamma_mucv2shapescale(incub_mu,
-                                incub_sd / incub_mu)
+                                      incub_sd / incub_mu)
 
 incubation <- distcrete("gamma",
                         interval = 1,
@@ -209,4 +207,69 @@ toy_data %>%
 
 ## Simulator
 
+The contact data simulator assembles the various components of the functions
+above, and outputs S3 objects with class `contact_data`.
 
+```{r }
+
+#' Simulate contact tracing data
+#' 
+#' @param n the number of contacts to simulate
+#' 
+#' @param rate_infection a positive rate of infection per day of contact
+#'
+#' @param
+#'
+
+simulate_contacts <- function(n,
+                              incubation,
+                              rate_infection = 0,
+                              exposure_mean_duration = 1,
+                              exposure_min_date = 0,
+                              exposure_max_date = 30
+                              ) {
+
+  out <- date_exposure_r(n = n,
+                         min = exposure_min_date,
+                         max = exposure_max_date,
+                         mean_duration = exposure_mean_duration)
+  
+  out <- infect_contacts(out, rate_infection = rate_infection)
+  out <- tibble(out)
+  class(out) <- c("contact_data", class(out))
+  out
+}
+
+
+plot.contact_data <- function(x) {
+  
+  pivot_longer(x,
+               cols = date_infection:date_onset,
+               names_to = "event",
+               values_to = "event_date") %>%
+  mutate(event = sub("date_", "", event)) %>% 
+  mutate(id = factor(id)) %>%
+  ggplot(aes(x = exposure_start, y = id, color = case)) +
+  geom_segment(aes(xend = exposure_end, yend = id)) +
+  geom_point() +
+  geom_point(aes(x = exposure_end)) +
+  geom_point(aes(x = event_date, shape = event), size = 4) +
+  scale_shape_manual(values = c(infection = 4, onset = 1)) +
+  theme_bw() +
+  labs(x = "Time", y = "Contact ID")
+}
+
+```
+
+Example:
+
+```{r }
+
+x <- simulate_contacts(50,
+                       incubation = incubation$r,
+                       rate_infection = .2,
+                       exposure_mean_duration = 5)
+x
+plot(x)
+
+```
