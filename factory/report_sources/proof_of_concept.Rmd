@@ -65,7 +65,7 @@ duration_r <- function(n, mean = 1) {
     stop(msg)
   }
   
-  1 + rpois(n, mean - 1)
+  1L + rpois(n, mean - 1)
 }
 
 ```
@@ -96,10 +96,10 @@ date_exposure_r <- function(n, min = 0L, max = 30L, mean_duration = 1) {
   date_start <- base[sample.int(L, size = n, replace = TRUE)]
   durations <- duration_r(n, mean_duration)
   data.frame(
-      id = 1:n,
-      exposure_start = date_start,
-      exposure_end = date_start + durations - 1,
-      exposure_duration = durations
+      id = as.integer(1:n),
+      exposure_start = as.integer(date_start),
+      exposure_end = as.integer(date_start + durations - 1),
+      exposure_duration = as.integer(durations)
   )
 }
 
@@ -292,8 +292,8 @@ This function adds to variables to indicate when followup must start and end (bo
 
 add_followup <- function(x, followup_duration) {
   mutate(x,
-         followup_start = exposure_end + 1,
-         followup_end = followup_start + followup_duration - 1)
+         followup_start = as.integer(exposure_end + 1),
+         followup_end = as.integer(followup_start + followup_duration - 1))
 }
 
 x <- x %>%
@@ -305,11 +305,25 @@ x
 
 ### Finding active contacts
 
+Active contacts are contacts which, at time *t*:
+
+* have not been detected yet
+* are within the followup window
+
 ```{r }
 
 active_contacts <- function(x, t, filter = TRUE) {
+  
+  if (!"detected" %in% names(x)) {
+    x <- mutate(x, detected = rep(FALSE, n()))
+  }
+
+
   out <- mutate(x,
-                active = t >= followup_start & t <= followup_end)
+                active =
+                  t >= followup_start &
+                  t <= followup_end &
+                  !detected)
   if (filter) {
     out <- filter(out, active)
     out <- select(out, -active)
@@ -349,20 +363,52 @@ x %>%
 #' @param coverage the proportion of contacts followed
 
 random_followup <- function(x, t, coverage, followup_only = FALSE) {
-  
+
+  ## check active contacts
+  t <- as.integer(t)
   out <- active_contacts(x, t, filter = FALSE)
 
-  out <- mutate(out,
-                followup = sample(c("seen", "missed"),
-                                  n(),
-                                  replace = TRUE,
-                                  prob = c(coverage, 1 - coverage)),
-                followup = if_else(active, followup, "inactive"),
-                followup = if_else(followup == "seen" &
-                                   t == date_onset &
-                                   case == "case",
-                                   "detected",
-                                   followup))
+  ## add needed variables on followup history if they are missing
+  ## * last_seen: needed to define 'detected' cases
+  ## * detected: needed to ignore already detected cases
+  if (!"last_seen" %in% names(out)) {
+    out <- mutate(out, last_seen = rep(-1L, n()))
+  }
+  if (!"detected" %in% names(out)) {
+    out <- mutate(out, detected = rep(FALSE, n()))
+  }
+
+
+  ## strategy:
+  ## 1. determine the number of contacts followed at time t  
+  ## 2. determine which contacts are still active
+  ## 3. select followed contacts from active ones
+
+  active_id <- pull(filter(out, active), id)
+  n_followed <- rbinom(1, nrow(out), coverage)
+  n_followed <- min(length(active_id), n_followed)
+  id_followed <- sample_(active_id, n_followed, replace = FALSE)
+  
+  ## add followup info
+  out <- mutate(
+      out,
+      followup = if_else(id %in% id_followed,
+                         "seen",
+                         "missed"),
+      followup = if_else(active, followup, "inactive"),
+      followup = if_else(followup == "seen" &
+                         t >= date_onset &
+                         last_seen < date_onset &
+                         case == "case",
+                         "detected",
+                         followup),
+      detected = if_else(followup == "detected",
+                         TRUE,
+                         detected),
+      last_seen = if_else(followup %in% c("detected", "seen"),
+                          t,
+                          last_seen)
+      )
   out <- rename(out, !!paste("followup", t, sep = "_") := followup)
   out <- select(out, -active)
   if (followup_only) {
