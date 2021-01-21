@@ -291,9 +291,21 @@ This function adds to variables to indicate when followup must start and end (bo
 ```{r }
 
 add_followup <- function(x, followup_duration) {
+  
+  ## add needed variables on followup history
+
+  ## * followup_start and _end: time window for active followup (both dates
+  ##   included)
+  ## * last_seen: needed to define 'detected' cases
+  ## * detected: needed to ignore already detected cases
+  ## * detected_at: needed to calculate delays to detection
+  
   mutate(x,
          followup_start = as.integer(exposure_end + 1L),
-         followup_end = as.integer(followup_start + followup_duration - 1L))
+         followup_end = as.integer(followup_start + followup_duration - 1L),
+         last_seen = rep(-1L, n()),
+         detected = rep(FALSE, n()),
+         detected_at = rep(NA_integer_, n()))
 }
 
 x <- x %>%
@@ -354,13 +366,18 @@ x %>%
 
 ```{r }
 
-#' @param x a `contact_data` object
+#' Random contact followup
+#'
+#' This function will perform random contact followup at a given time `t`
+#' 
+#' @param x a `contact_data` object, potentially containing previous followup
+#'   history
 #'
 #' @param t current time of followup
 #'
 #' @param coverage the proportion of contacts followed
 
-random_followup <- function(x, t, coverage, followup_only = FALSE) {
+random_followup_t <- function(x, t, coverage, followup_only = FALSE) {
 
   ## add variables as needed
   t <- as.integer(t)
@@ -430,68 +447,128 @@ Example:
 ```{r }
 
 # 50% contacts followed on day 10
-random_followup(x, 10, 0.5)
-random_followup(x, 10, 0.5) %>%
+random_followup_t(x, 10, 0.5)
+random_followup_t(x, 10, 0.5) %>%
   count(followup_10)
 
 ```
 
-All followup from day 1 to 30:
+For convenience, we also build a function which will achieve followup for all
+days in a given time window:
 
 ```{r }
 
-days <- seq(from = min(x$followup_start), to = max(x$followup_end), by = 1L)
+random_followup <- function(x, coverage) {
+  if (!inherits(x, "contact_data")) {
+    msg <- "x is not a `contact_data` object"
+  }
+  
+  days <- seq(from = min(x$followup_start), to = max(x$followup_end), by = 1L)
 
-previous_followup <- x
-for (i in seq_along(days)) {
-  res_random <- random_followup(previous_followup,
-                                t = days[i],
-                                0.01,
-                                FALSE)
-  previous_followup <- res_random
+  previous_followup <- x
+  for (i in seq_along(days)) {
+    out <- random_followup_t(previous_followup,
+                                    t = days[i],
+                                    0.01,
+                                    FALSE)
+    previous_followup <- out
+  }
+
+  class(out) <- c("followup", class(out))
+  out
 }
 
-res_random_simple <- res_random %>%
-  select(id, contains("followup"), -followup_start, -followup_end) %>% 
-  pivot_longer(-1, names_to = "time", values_to = "followup") %>%
-  mutate(
-      time = gsub("followup_", "", time), time = as.integer(time),
-      followup = factor(followup, levels = c("inactive", "seen", "missed", "detected")))
-res_random_simple
+```
 
+We also add a function to plot `followup` objects:
 
-## color scale
-scale_fill_followup <- scale_fill_manual(
-    values = c(inactive = "#C4B5B2",
-               detected = "#B74967",
-               seen = "#49A0D5",
-               missed = "#ECBF74")
-)
+```{r }
 
+plot.followup <- function(x, show_inactive = TRUE) {
+  
+  ## color scale
+  scale_fill_followup <- scale_fill_manual(
+      values = c(inactive = "#C4B5B2",
+                 detected = "#B74967",
+                 seen = "#49A0D5",
+                 missed = "#ECBF74")
+  )
 
-## graph of followup over time
-res_random_simple %>%
-  count(time, followup) %>%
-  ggplot(aes(x = time, y = n)) +
+  ## reshape data into long format
+  x_long <- select(x,
+                   id,
+                   contains("followup"),
+                   -followup_start,
+                   -followup_end)
+  x_long <- pivot_longer(x_long, -1, names_to = "time", values_to = "followup")
+  x_long <- mutate(x_long,
+                   time = gsub("followup_", "", time),
+                   time = as.integer(time),
+                   followup = factor(
+                       followup,
+                       levels = c("inactive", "seen", "missed", "detected")))
+
+  if (!show_inactive) {
+    x_long <-  filter(x_long, followup != "inactive")
+  }
+  
+  ## make plot
+  x_counts <- count(x_long, time, followup)
+  ggplot(x_counts, aes(x = time, y = n)) +
   geom_col(aes(fill = followup)) +
   theme_bw() +
   scale_fill_followup +
   labs(x = "time",
        y = "number of contacts",
        title = "Contact followup")
+}
 
-## with only active contacts
-res_random_simple %>%
-  filter(followup != "inactive") %>% 
-  count(time, followup) %>%
-  ggplot(aes(x = time, y = n)) +
-  geom_col(aes(fill = followup)) +
-  theme_bw() +
-  scale_fill_followup +
-  labs(x = "time",
-       y = "number of contacts",
-       title = "Contact followup",
-       subtitle = "only active contacts")
+```
+
+A summary method will provide information on:
+
+* the breakdown of cases detected / not detected, and associated proportion
+* 
+
+```{r }
+
+summary.followup <- function(object) {
+  x <- object
+  cases <- filter(x,
+                  case == "case")
+
+  ## breakdown of cases
+  n_cases <- nrow(cases)
+  n_detected <- sum(cases$detected)
+  n_non_detected <- sum(!cases$detected)
+
+  ## delay to detection
+  delay_detection <- as.integer(cases$detected_at - cases$date_onset)
+  delay_detection <- delay_detection[!is.na(delay_detection)]
+
+  list(
+      n_contacts = nrow(x),
+      n_cases = n_cases,
+      n_detected = n_detected,
+      n_non_detected = n_non_detected,
+      p_detected = n_detected / n_cases,
+      p_detected_ci = prop.test(n_detected, n_cases)["conf.int"]$conf.int,
+      delay_detection = delay_detection,
+      delay_detection_smry = summary(delay_detection)
+  )
+}
+
+```
+
+Followup for all contacts over the full time period:
+
+```{r }
+
+res_random <- random_followup(x, 0.01)
+res_random
+plot(res_random)
+plot(res_random, FALSE)
+
 
 
 ## proportion of cases detected
@@ -516,3 +593,25 @@ res_random_delay %>%
        title = "Distribution of delay to detection")
 
 ```
+
+
+
+### Full example
+
+```{r }
+
+x <- simulate_contacts(10000,
+                       incubation = incubation$r,
+                       rate_infection = .2,
+                       exposure_mean_duration = 3) %>%
+  add_followup(incubation$q(.95))
+
+
+
+
+
+
+```
+
+
+
