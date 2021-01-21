@@ -620,9 +620,9 @@ random_strategy <- function(x, n, t) {
   ## 1. determine which contacts are still active
   ## 2. sample IDs randomly from active IDs
 
-  active_id <- pull(filter(x, active), id)
-  n_followed <- min(length(active_id), n)
-  sample_(active_id, n_followed, replace = FALSE)
+  x <- filter(x, active)
+  x <- sample_n(x, n)
+  pull(x, id)
   
 }
 
@@ -669,9 +669,74 @@ data.frame(x = summary(res_random)$delay_detection) %>%
 
 ## New first strategy
 
+In this strategy, contacts who reported the most recent exposure are prioritised.
+
 ### Strategy implementation
+
+```{r }
+
+#' new first contact followup
+#'
+#' @param x a `contact_data` with information on active contacts as returned by
+#'   `active_contacts`
+#'
+#' @param n the number of contacts to be followed
+#'
+#' @param t the current time; not used, but present for compatibility with other methods
+#'
+#' @return a vector of IDs of contacts to be followed
+#' 
+new_first_strategy <- function(x, n, t) {
+  ## strategy:
+  ## 1. keep only active contacts
+  ## 2. calculate delay between last exposure and current time
+  ## 3. sort them by decreasing delay
+  ## 4. keep the first n ids
+ 
+  n_followed <- min(sum(x$active), n)
+
+  x <- filter(x, active)
+  x <- mutate(x, delay = as.integer(t - followup_start))
+  x <- arrange(x, delay)
+  x <- slice(x, seq_len(n))
+  pull(x, id)
+  
+}
+
+```
+
+
+
 
 
 ### Example
 
+Here we run an example based on 10,000 contacts to follow.
 
+```{r }
+
+res_new_first <- simulate_contacts(
+    10000,
+    incubation = incubation$r,
+    rate_infection = .2,
+    exposure_mean_duration = 3) %>%
+  add_followup(incubation$q(.95)) %>%
+  followup(.01, strategy = new_first_strategy)
+
+plot(res_new_first, FALSE)
+
+
+## proportion of cases detected
+summary(res_new_first)$p_detected
+summary(res_new_first)$p_detected_ci
+
+## delay to detection
+data.frame(x = summary(res_new_first)$delay_detection) %>%
+  ggplot(aes(x = x)) +
+  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
+  theme_bw() +
+  labs(x = "Days from onset to detection",
+       y = "Frequency",
+       title = "Distribution of delay to detection")
+
+```
