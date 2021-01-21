@@ -572,20 +572,12 @@ plot(res_random, FALSE)
 
 
 ## proportion of cases detected
-res_random %>%
-  filter(case == "case") %>%
-  summarise(p_detected = mean(detected))
+summary(res_random)$p_detected
+summary(res_random)$p_detected_ci
 
 ## delay to detection
-res_random_delay <- res_random %>%
-  filter(case == "case") %>%
-  transmute(delay_detection = detected_at - date_onset)
-
-res_random_delay %>%
-  summary()
-
-res_random_delay %>%
-  ggplot(aes(x = delay_detection)) +
+data.frame(x = summary(res_random)$delay_detection) %>%
+  ggplot(aes(x = x)) +
   geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
   theme_bw() +
   labs(x = "Days from onset to detection",
@@ -600,16 +592,30 @@ res_random_delay %>%
 
 ```{r }
 
-x <- simulate_contacts(10000,
-                       incubation = incubation$r,
-                       rate_infection = .2,
-                       exposure_mean_duration = 3) %>%
-  add_followup(incubation$q(.95))
+res_random <- simulate_contacts(
+    10000,
+    incubation = incubation$r,
+    rate_infection = .2,
+    exposure_mean_duration = 3) %>%
+  add_followup(incubation$q(.95)) %>%
+  random_followup(0.01)
+
+plot(res_random)
 
 
 
+## proportion of cases detected
+summary(res_random)$p_detected
+summary(res_random)$p_detected_ci
 
-
+## delay to detection
+data.frame(x = summary(res_random)$delay_detection) %>%
+  ggplot(aes(x = x)) +
+  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
+  theme_bw() +
+  labs(x = "Days from onset to detection",
+       y = "Frequency",
+       title = "Distribution of delay to detection")
 
 ```
 
