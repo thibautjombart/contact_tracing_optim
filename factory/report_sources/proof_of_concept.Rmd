@@ -292,8 +292,8 @@ This function adds to variables to indicate when followup must start and end (bo
 
 add_followup <- function(x, followup_duration) {
   mutate(x,
-         followup_start = as.integer(exposure_end + 1),
-         followup_end = as.integer(followup_start + followup_duration - 1))
+         followup_start = as.integer(exposure_end + 1L),
+         followup_end = as.integer(followup_start + followup_duration - 1L))
 }
 
 x <- x %>%
@@ -313,12 +313,10 @@ Active contacts are contacts which, at time *t*:
 ```{r }
 
 active_contacts <- function(x, t, filter = TRUE) {
-  
   if (!"detected" %in% names(x)) {
     x <- mutate(x, detected = rep(FALSE, n()))
   }
-
-
+ 
   out <- mutate(x,
                 active =
                   t >= followup_start &
@@ -364,19 +362,24 @@ x %>%
 
 random_followup <- function(x, t, coverage, followup_only = FALSE) {
 
-  ## check active contacts
+  ## add variables as needed
   t <- as.integer(t)
-  out <- active_contacts(x, t, filter = FALSE)
 
   ## add needed variables on followup history if they are missing
   ## * last_seen: needed to define 'detected' cases
   ## * detected: needed to ignore already detected cases
-  if (!"last_seen" %in% names(out)) {
-    out <- mutate(out, last_seen = rep(-1L, n()))
+  if (!"last_seen" %in% names(x)) {
+    x <- mutate(x, last_seen = rep(-1L, n()))
   }
-  if (!"detected" %in% names(out)) {
-    out <- mutate(out, detected = rep(FALSE, n()))
+  if (!"detected" %in% names(x)) {
+    x <- mutate(x, detected = rep(FALSE, n()))
   }
+  if (!"detected_at" %in% names(x)) {
+    x <- mutate(x, detected_at = rep(NA_integer_, n()))
+  }
+
+  ## check active contacts
+  out <- active_contacts(x, t, filter = FALSE)
 
 
   ## strategy:
@@ -405,6 +408,9 @@ random_followup <- function(x, t, coverage, followup_only = FALSE) {
       detected = if_else(followup == "detected",
                          TRUE,
                          detected),
+      detected_at = if_else(followup == "detected",
+                         t,
+                         detected_at),
       last_seen = if_else(followup %in% c("detected", "seen"),
                           t,
                           last_seen)
@@ -436,36 +442,77 @@ All followup from day 1 to 30:
 
 days <- seq(from = min(x$followup_start), to = max(x$followup_end), by = 1L)
 
-res_random <- lapply(days, function(t) random_followup(x, t, 0.5, TRUE)) %>%
-  bind_cols() %>%
-  rownames_to_column("id") %>%
+previous_followup <- x
+for (i in seq_along(days)) {
+  res_random <- random_followup(previous_followup,
+                                t = days[i],
+                                0.01,
+                                FALSE)
+  previous_followup <- res_random
+}
+
+res_random_simple <- res_random %>%
+  select(id, contains("followup"), -followup_start, -followup_end) %>% 
   pivot_longer(-1, names_to = "time", values_to = "followup") %>%
   mutate(
       time = gsub("followup_", "", time), time = as.integer(time),
       followup = factor(followup, levels = c("inactive", "seen", "missed", "detected")))
-res_random
+res_random_simple
 
 
-## general graph
-res_random %>%
+## color scale
+scale_fill_followup <- scale_fill_manual(
+    values = c(inactive = "#C4B5B2",
+               detected = "#B74967",
+               seen = "#49A0D5",
+               missed = "#ECBF74")
+)
+
+
+## graph of followup over time
+res_random_simple %>%
   count(time, followup) %>%
   ggplot(aes(x = time, y = n)) +
   geom_col(aes(fill = followup)) +
   theme_bw() +
+  scale_fill_followup +
   labs(x = "time",
        y = "number of contacts",
        title = "Contact followup")
 
 ## with only active contacts
-res_random %>%
+res_random_simple %>%
   filter(followup != "inactive") %>% 
   count(time, followup) %>%
   ggplot(aes(x = time, y = n)) +
   geom_col(aes(fill = followup)) +
   theme_bw() +
+  scale_fill_followup +
   labs(x = "time",
        y = "number of contacts",
        title = "Contact followup",
        subtitle = "only active contacts")
+
+
+## proportion of cases detected
+res_random %>%
+  filter(case == "case") %>%
+  summarise(p_detected = mean(detected))
+
+## delay to detection
+res_random_delay <- res_random %>%
+  filter(case == "case") %>%
+  transmute(delay_detection = detected_at - date_onset)
+
+res_random_delay %>%
+  summary()
+
+res_random_delay %>%
+  ggplot(aes(x = delay_detection)) +
+  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
+  theme_bw() +
+  labs(x = "Days from onset to detection",
+       y = "Frequency",
+       title = "Distribution of delay to detection")
 
 ```
