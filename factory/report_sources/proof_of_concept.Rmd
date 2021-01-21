@@ -280,14 +280,10 @@ plot(x)
 
 # Contact tracing simulation
 
-## Random follow-up
-
-In this section we devise a function which will process a `contact_data` object
-and simulate follow-up over time using a random strategy.
-
-### Adding followup window
+## Adding followup window
 
 This function adds to variables to indicate when followup must start and end (both dates inclusive).
+
 ```{r }
 
 add_followup <- function(x, followup_duration) {
@@ -315,7 +311,7 @@ x
 ```
 
 
-### Finding active contacts
+## Finding active contacts
 
 Active contacts are contacts which, at time *t*:
 
@@ -324,7 +320,7 @@ Active contacts are contacts which, at time *t*:
 
 ```{r }
 
-active_contacts <- function(x, t, filter = TRUE) {
+active_contacts <- function(x, t, filter = FALSE) {
   if (!"detected" %in% names(x)) {
     x <- mutate(x, detected = rep(FALSE, n()))
   }
@@ -349,36 +345,80 @@ Example:
 ```{r }
 
 x %>%
-  active_contacts(5, filter = FALSE)
+  active_contacts(5)
 
 x %>%
   active_contacts(10)
 
 x %>%
-  active_contacts(10) %>%
+  active_contacts(10, filter = TRUE) %>%
   plot()
 
 ```
 
 
 
-### Random followup strategy
+## Contact followup implementation
+
+In this section we devise functions which will process a `contact_data` object
+and simulate follow-up over time using a given contact followup
+strategy. Strategies themselves are functions with a pre-defined set of
+arguments, taking contact tracing data in and outputting a IDs of contacts to
+follow.
+
+
+### Followup at a given time
+
+This function achieves followup at a given time *t*, taking into account past
+followup history if it is contained in the data.
 
 ```{r }
 
-#' Random contact followup
+check_strategy <- function(f) {
+  if (!is.function(f)) {
+    msg <- "`f` is not a function"
+    stop(msg)
+  }
+  
+  ## check signature
+  arguments <- as.list(args(f))
+  if (!identical(
+           names(arguments)[1:3],
+           c("x", "n", "t"))
+      ) {
+    msg <- "arguments must be: `x`, `n` and `t`"
+    stop(msg)
+  }
+}
+
+
+
+#' Followup at time t
 #'
-#' This function will perform random contact followup at a given time `t`
+#' This function will perform contact followup at a given time `t` given a
+#' user-provided strategy.
 #' 
 #' @param x a `contact_data` object, potentially containing previous followup
 #'   history
 #'
+#' @param n_followed the number of contacts followed at time `t`
+#'
 #' @param t current time of followup
 #'
-#' @param coverage the proportion of contacts followed
+#' @param strategy a function taking as input a `contact_data` object `x`, the
+#'   number of contacts to follow `n`, and the current time `t`
+#'
+#' @param followup_only a `logical` indicating if only followup information
+#'   should be returned; if `FALSE` (default), the original data with added
+#'   followup information is returned
 
-random_followup_t <- function(x, t, coverage, followup_only = FALSE) {
+followup_t <- function(x, n_followed, t,
+                       strategy = random_strategy,
+                       followup_only = FALSE) {
 
+  ## perform checks
+  check_strategy(strategy)
+  
   ## add variables as needed
   t <- as.integer(t)
 
@@ -398,16 +438,9 @@ random_followup_t <- function(x, t, coverage, followup_only = FALSE) {
   ## check active contacts
   out <- active_contacts(x, t, filter = FALSE)
 
+  ## find which ones to follow
+  id_followed <- strategy(out, n_followed, t)
 
-  ## strategy:
-  ## 1. determine the number of contacts followed at time t  
-  ## 2. determine which contacts are still active
-  ## 3. select followed contacts from active ones
-
-  active_id <- pull(filter(out, active), id)
-  n_followed <- rbinom(1, nrow(out), coverage)
-  n_followed <- min(length(active_id), n_followed)
-  id_followed <- sample_(active_id, n_followed, replace = FALSE)
   
   ## add followup info
   out <- mutate(
@@ -442,35 +475,33 @@ random_followup_t <- function(x, t, coverage, followup_only = FALSE) {
 
 ```
 
-Example:
 
-```{r }
 
-# 50% contacts followed on day 10
-random_followup_t(x, 10, 0.5)
-random_followup_t(x, 10, 0.5) %>%
-  count(followup_10)
 
-```
+
+### Followup over successive time windows
 
 For convenience, we also build a function which will achieve followup for all
 days in a given time window:
 
 ```{r }
 
-random_followup <- function(x, coverage) {
+followup <- function(x, coverage, strategy = random_strategy) {
   if (!inherits(x, "contact_data")) {
     msg <- "x is not a `contact_data` object"
   }
+  check_strategy(strategy)
   
   days <- seq(from = min(x$followup_start), to = max(x$followup_end), by = 1L)
+  n_followed <- round(coverage * nrow(x))
 
   previous_followup <- x
+  
   for (i in seq_along(days)) {
-    out <- random_followup_t(previous_followup,
-                                    t = days[i],
-                                    0.01,
-                                    FALSE)
+    out <- followup_t(previous_followup,
+                      t = days[i],
+                      n_followed = n_followed,
+                      strategy = strategy)
     previous_followup <- out
   }
 
@@ -479,6 +510,9 @@ random_followup <- function(x, coverage) {
 }
 
 ```
+
+
+### S3 methods
 
 We also add a function to plot `followup` objects:
 
@@ -527,8 +561,9 @@ plot.followup <- function(x, show_inactive = TRUE) {
 
 A summary method will provide information on:
 
-* the breakdown of cases detected / not detected, and associated proportion
-* 
+* the breakdown of cases detected / not detected, and associated proportion and CI
+* data on delay to detection (onset to detection)
+* summary on delay to detection
 
 ```{r }
 
@@ -560,35 +595,46 @@ summary.followup <- function(object) {
 
 ```
 
-Followup for all contacts over the full time period:
+
+
+
+## Random strategy
+
+### Strategy implementation
 
 ```{r }
 
-res_random <- random_followup(x, 0.01)
-res_random
-plot(res_random)
-plot(res_random, FALSE)
+#' Random contact followup
+#'
+#' @param x a `contact_data` with information on active contacts as returned by
+#'   `active_contacts`
+#'
+#' @param n the number of contacts to be followed
+#'
+#' @param t the current time; not used, but present for compatibility with other methods
+#'
+#' @return a vector of IDs of contacts to be followed
+#' 
+random_strategy <- function(x, n, t) {
+  ## strategy:
+  ## 1. determine which contacts are still active
+  ## 2. sample IDs randomly from active IDs
 
-
-
-## proportion of cases detected
-summary(res_random)$p_detected
-summary(res_random)$p_detected_ci
-
-## delay to detection
-data.frame(x = summary(res_random)$delay_detection) %>%
-  ggplot(aes(x = x)) +
-  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
-  theme_bw() +
-  labs(x = "Days from onset to detection",
-       y = "Frequency",
-       title = "Distribution of delay to detection")
+  active_id <- pull(filter(x, active), id)
+  n_followed <- min(length(active_id), n)
+  sample_(active_id, n_followed, replace = FALSE)
+  
+}
 
 ```
 
 
 
-### Full example
+
+
+### Example
+
+Here we run an example based on 10,000 contacts to follow.
 
 ```{r }
 
@@ -598,10 +644,9 @@ res_random <- simulate_contacts(
     rate_infection = .2,
     exposure_mean_duration = 3) %>%
   add_followup(incubation$q(.95)) %>%
-  random_followup(0.01)
+  followup(.01)
 
-plot(res_random)
-
+plot(res_random, FALSE)
 
 
 ## proportion of cases detected
@@ -619,5 +664,14 @@ data.frame(x = summary(res_random)$delay_detection) %>%
 
 ```
 
+
+
+
+## New first strategy
+
+### Strategy implementation
+
+
+### Example
 
 
