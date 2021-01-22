@@ -463,16 +463,12 @@ followup_t <- function(x, n_followed, t,
   ## add followup info
   out <- mutate(
       out,
-      followup = if_else(id %in% id_followed,
-                         "seen",
-                         "missed"),
-      followup = if_else(active, followup, "inactive"),
-      followup = if_else(followup == "seen" &
-                         t >= date_onset &
-                         last_seen < date_onset &
-                         case == "case",
-                         "detected",
-                         followup),
+      followup = case_when(
+          !active ~ "inactive",
+          !(id %in% id_followed) ~ "missed",
+          t >= date_onset & last_seen < date_onset ~ "detected",
+          TRUE ~ "seen"
+      ),
       detected = if_else(followup == "detected",
                          TRUE,
                          detected),
@@ -483,6 +479,7 @@ followup_t <- function(x, n_followed, t,
                           t,
                           last_seen)
       )
+
   out <- rename(out, !!paste("followup", t, sep = "_") := followup)
   out <- select(out, -active)
   if (followup_only) {
@@ -593,8 +590,8 @@ summary.followup <- function(object) {
 
   ## breakdown of cases
   n_cases <- nrow(cases)
-  n_detected <- sum(cases$detected)
-  n_non_detected <- sum(!cases$detected)
+  n_detected <- sum(cases$detected, na.rm = TRUE)
+  n_non_detected <- sum(!cases$detected, na.rm = TRUE)
 
   ## delay to detection
   delay_detection <- as.integer(cases$detected_at - cases$date_onset)
@@ -607,8 +604,8 @@ summary.followup <- function(object) {
       n_non_detected = n_non_detected,
       p_detected = n_detected / n_cases,
       p_detected_ci = prop.test(n_detected, n_cases)["conf.int"]$conf.int,
-      delay_detection = delay_detection,
-      delay_detection_smry = summary(delay_detection)
+      delay_detection_smry = summary(delay_detection),
+      delay_detection = delay_detection
   )
 }
 
@@ -662,25 +659,27 @@ res_random <- simulate_contacts(
     10000,
     incubation = incubation$r,
     rate_infection = .2,
-    exposure_mean_duration = 3) %>%
+    exposure_mean_duration = 3,
+    exposure_max_date = 90) %>%
   add_followup(incubation$q(.95)) %>%
   followup(.01)
 
 plot(res_random, FALSE)
 
 
-## proportion of cases detected
-summary(res_random)$p_detected
-summary(res_random)$p_detected_ci
+## summary of results
+summary(res_random) %>%
+  head(7)
 
 ## delay to detection
 data.frame(x = summary(res_random)$delay_detection) %>%
   ggplot(aes(x = x)) +
-  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
+  geom_bar(fill = "#ECBF74")+
   theme_bw() +
   labs(x = "Days from onset to detection",
        y = "Frequency",
-       title = "Distribution of delay to detection")
+       title = "Distribution of delay to detection",
+       subtitle = "Random followup strategy")
 
 ```
 
@@ -734,25 +733,27 @@ res_new_first <- simulate_contacts(
     10000,
     incubation = incubation$r,
     rate_infection = .2,
-    exposure_mean_duration = 3) %>%
+    exposure_mean_duration = 3,
+    exposure_max_date = 90) %>%
   add_followup(incubation$q(.95)) %>%
   followup(.01, strategy = new_first_strategy)
 
 plot(res_new_first, FALSE)
 
+## summary of results
+summary(res_new_first) %>%
+  head(7)
 
-## proportion of cases detected
-summary(res_new_first)$p_detected
-summary(res_new_first)$p_detected_ci
 
 ## delay to detection
 data.frame(x = summary(res_new_first)$delay_detection) %>%
   ggplot(aes(x = x)) +
-  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
+  geom_bar(fill = "#ECBF74")+
   theme_bw() +
   labs(x = "Days from onset to detection",
        y = "Frequency",
-       title = "Distribution of delay to detection")
+       title = "Distribution of delay to detection",
+       subtitle = "'New first' followup strategy")
 
 ```
 
@@ -816,24 +817,26 @@ res_no_drop <- simulate_contacts(
     10000,
     incubation = incubation$r,
     rate_infection = .2,
-    exposure_mean_duration = 3) %>%
+    exposure_mean_duration = 3,
+    exposure_max_date = 90) %>%
   add_followup(incubation$q(.95)) %>%
   followup(.01, strategy = no_drop_strategy)
 
 plot(res_no_drop, FALSE)
 
+## summary of results
+summary(res_no_drop) %>%
+  head(7)
 
-## proportion of cases detected
-summary(res_no_drop)$p_detected
-summary(res_no_drop)$p_detected_ci
 
 ## delay to detection
 data.frame(x = summary(res_no_drop)$delay_detection) %>%
   ggplot(aes(x = x)) +
-  geom_density(color = "#ECBF74", fill = "#ECBF74", alpha = .6) +
+  geom_bar(fill = "#ECBF74")+
   theme_bw() +
   labs(x = "Days from onset to detection",
        y = "Frequency",
-       title = "Distribution of delay to detection")
+       title = "Distribution of delay to detection",
+       subtitle = "'No drop' followup strategy")
 
 ```
