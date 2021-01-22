@@ -1,15 +1,21 @@
 ---
 title: "Simulating contact tracing data"
 author: "Thibaut Jombart"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
-  html_document: default
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: pygments
 ---
 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, collapse = TRUE, fig.width = 8, fig.height = 6, dpi = 70)
 ```
-
 
 
 
@@ -205,7 +211,7 @@ toy_data %>%
 
 
 
-## Simulator
+## Contact simulator
 
 The contact data simulator assembles the various components of the functions
 above, and outputs S3 objects with class `contact_data`.
@@ -278,11 +284,14 @@ plot(x)
 
 
 
-# Contact tracing simulation
+# Contact followup simulation
 
-## Adding followup window
+## Adding followup info to contacts
 
-This function adds to variables to indicate when followup must start and end (both dates inclusive).
+This function adds to variables used for the followup of contact to
+`contact_data` objects; these variables include when followup must start and end
+(both dates inclusive), when contacts were last seen, if cases have been
+detected, and when they were..
 
 ```{r }
 
@@ -358,19 +367,16 @@ x %>%
 
 
 
-## Contact followup implementation
+## Contact followup implementation {.tabset .tabset-fade .tabset-pills}
 
 In this section we devise functions which will process a `contact_data` object
 and simulate follow-up over time using a given contact followup
 strategy. Strategies themselves are functions with a pre-defined set of
 arguments, taking contact tracing data in and outputting a IDs of contacts to
-follow.
+follow. The function `check_strategy` will be used to check that a `strategy`
+has the correct set of arguments.
 
-
-### Followup at a given time
-
-This function achieves followup at a given time *t*, taking into account past
-followup history if it is contained in the data.
+### Check strategy
 
 ```{r }
 
@@ -391,7 +397,15 @@ check_strategy <- function(f) {
   }
 }
 
+```
 
+
+### Followup at a given time
+
+This function achieves followup at a given time *t*, taking into account past
+followup history if it is contained in the data.
+
+```{r }
 
 #' Followup at time t
 #'
@@ -429,7 +443,7 @@ followup_t <- function(x, n_followed, t,
     x <- mutate(x, last_seen = rep(-1L, n()))
   }
   if (!"detected" %in% names(x)) {
-    x <- mutate(x, detected = rep(FALSE, n()))
+    x <- mutate(x, rep(FALSE, n()))
   }
   if (!"detected_at" %in% names(x)) {
     x <- mutate(x, detected_at = rep(NA_integer_, n()))
@@ -438,6 +452,10 @@ followup_t <- function(x, n_followed, t,
   ## check active contacts
   out <- active_contacts(x, t, filter = FALSE)
 
+  ## make sure we don't follow more contacts than there are active ones
+  n_active <- sum(out$active)
+  n_followed <- min(n_followed, n_active)
+  
   ## find which ones to follow
   id_followed <- strategy(out, n_followed, t)
 
@@ -477,12 +495,10 @@ followup_t <- function(x, n_followed, t,
 
 
 
-
-
 ### Followup over successive time windows
 
-For convenience, we also build a function which will achieve followup for all
-days in a given time window:
+This is the main function to implement followup. For convenience, we also build
+a function which will achieve followup for all days in a given time window:
 
 ```{r }
 
@@ -505,6 +521,9 @@ followup <- function(x, coverage, strategy = random_strategy) {
     previous_followup <- out
   }
 
+  ## set detected in non_cases to NA
+  out <- mutate(out, detected = if_else(case == "case", detected, as.logical(NA)))
+  
   class(out) <- c("followup", class(out))
   out
 }
@@ -597,6 +616,7 @@ summary.followup <- function(object) {
 
 
 
+# Testing followup strategies {.tabset .tabset-pills}
 
 ## Random strategy
 
@@ -693,8 +713,6 @@ new_first_strategy <- function(x, n, t) {
   ## 3. sort them by decreasing delay
   ## 4. keep the first n ids
  
-  n_followed <- min(sum(x$active), n)
-
   x <- filter(x, active)
   x <- mutate(x, delay = as.integer(t - followup_start))
   x <- arrange(x, delay)
@@ -773,8 +791,6 @@ no_drop_strategy <- function(x, n, t) {
   ## 3. sort them by decreasing delay
   ## 4. keep the first n ids
  
-  n_followed <- min(sum(x$active), n)
-
   if (!"last_seen" %in% names(x)) {
     return(new_first_strategy(x, n, t))
   }
